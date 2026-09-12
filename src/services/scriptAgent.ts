@@ -68,16 +68,109 @@ function normalizeBreakdownCategory(cat: string): BreakdownCategory {
 }
 
 /**
+ * Helper to extract comprehensive screenplay intelligence and stats
+ */
+export function extractScreenplayIntelligence(scenes: Scene[]) {
+  const characterSceneMap = new Map<string, number[]>();
+  const locationSceneMap = new Map<string, string[]>();
+  const stuntsList: { sceneNumber: string; description: string }[] = [];
+  const propsList: { sceneNumber: string; name: string }[] = [];
+  let dayScenes = 0;
+  let nightScenes = 0;
+  let intScenes = 0;
+  let extScenes = 0;
+
+  scenes.forEach((s, idx) => {
+    const scNum = s.sceneNumber || String(idx + 1);
+
+    // Characters from script elements
+    (s.elements || []).forEach((el) => {
+      if (el.type === 'CHARACTER') {
+        const name = el.text.replace(/\(.*\)/, '').trim().toUpperCase();
+        if (name && name.length >= 2) {
+          if (!characterSceneMap.has(name)) characterSceneMap.set(name, []);
+          const list = characterSceneMap.get(name)!;
+          if (!list.includes(idx + 1)) list.push(idx + 1);
+        }
+      }
+    });
+
+    // Breakdown Items
+    (s.breakdownItems || []).forEach((b) => {
+      if (b.category === 'CAST' && b.name) {
+        const name = b.name.trim().toUpperCase();
+        if (!characterSceneMap.has(name)) characterSceneMap.set(name, []);
+        const list = characterSceneMap.get(name)!;
+        if (!list.includes(idx + 1)) list.push(idx + 1);
+      }
+      if (b.category === 'STUNTS') {
+        stuntsList.push({ sceneNumber: scNum, description: b.name });
+      }
+      if (b.category === 'PROPS' || b.category === 'VEHICLES') {
+        propsList.push({ sceneNumber: scNum, name: b.name });
+      }
+    });
+
+    // Locations
+    const loc = s.location?.trim() || 'Unknown Location';
+    if (!locationSceneMap.has(loc)) locationSceneMap.set(loc, []);
+    locationSceneMap.get(loc)!.push(scNum);
+
+    // Time
+    if (s.timeOfDay?.toUpperCase().includes('NIGHT') || s.timeOfDay?.includes('இரவு')) {
+      nightScenes++;
+    } else {
+      dayScenes++;
+    }
+
+    // Int/Ext
+    if (s.intExt?.toUpperCase().includes('INT') || s.intExt?.includes('உள்')) {
+      intScenes++;
+    } else {
+      extScenes++;
+    }
+  });
+
+  const characters = Array.from(characterSceneMap.entries())
+    .map(([name, scList]) => ({
+      name,
+      sceneCount: scList.length,
+      scenes: scList,
+    }))
+    .sort((a, b) => b.sceneCount - a.sceneCount);
+
+  return {
+    totalScenes: scenes.length,
+    totalCharacters: characters.length,
+    characters,
+    dayScenes,
+    nightScenes,
+    intScenes,
+    extScenes,
+    locations: Array.from(locationSceneMap.entries()).map(([location, sceneList]) => ({
+      location,
+      count: sceneList.length,
+      scenes: sceneList,
+    })),
+    stuntsList,
+    propsList,
+  };
+}
+
+/**
  * Helper to find a scene by sceneNumber or index
  */
 function findSceneIndex(scenes: Scene[], identifier?: string | number): number {
   if (identifier === undefined || identifier === null) return -1;
   const strId = String(identifier).trim().toLowerCase();
-  // Try exact sceneNumber match (e.g., "1", "2B")
-  const idx = scenes.findIndex((s) => s.sceneNumber.toLowerCase() === strId || s.sceneNumber.toLowerCase() === `sc.${strId}` || s.sceneNumber.toLowerCase() === `scene ${strId}`);
+  const idx = scenes.findIndex(
+    (s) =>
+      s.sceneNumber.toLowerCase() === strId ||
+      s.sceneNumber.toLowerCase() === `sc.${strId}` ||
+      s.sceneNumber.toLowerCase() === `scene ${strId}`
+  );
   if (idx !== -1) return idx;
 
-  // Try numeric 1-based index
   const num = parseInt(strId, 10);
   if (!isNaN(num) && num >= 1 && num <= scenes.length) {
     return num - 1;
@@ -101,10 +194,9 @@ export async function executeScriptAgentCommand(
   const key = getApiKey();
   const model = getSelectedModel();
 
-  // Snapshot of scenes for undo support
   const previousScenesSnapshot = JSON.parse(JSON.stringify(scenes));
+  const intel = extractScreenplayIntelligence(scenes);
 
-  // Prepare scene summaries for Gemini prompt
   const sceneSummaries = scenes.map((s, idx) => ({
     index: idx,
     sceneNumber: s.sceneNumber,
@@ -114,64 +206,52 @@ export async function executeScriptAgentCommand(
     timeOfDay: s.timeOfDay,
     page: s.startPage || 1,
     synopsis: s.synopsis,
-    elementCount: s.elements?.length || 0,
-    breakdownCount: s.breakdownItems?.length || 0,
+    charactersInScene: (s.elements || [])
+      .filter((e) => e.type === 'CHARACTER')
+      .map((e) => e.text)
+      .slice(0, 6),
   }));
 
   const systemPrompt = `
-You are the CineBreak AI Script Assistant & Screenplay Production Agent.
-The user is currently reading the screenplay on the Script Reading Page.
-When the user asks you to do something, you MUST understand their intent and respond with a structured JSON action plan to perform that task on their screenplay and viewer.
+You are CineBreak AI, an elite Hollywood & Kollywood Screenplay Script Assistant and Production Intelligence Agent.
+The user is viewing their screenplay and asking you to either:
+A) Perform an action (e.g. jump to scene/page, edit metadata, split/merge scenes, renumber scenes, add props/stunts, change font/zoom)
+B) Answer ANY question about the screenplay (e.g. "how many characters?", "who are the main characters?", "summarize scene 3", "list all night scenes", "explain the plot", "what stunts are required?")
 
-CURRENT STATE:
-- Currently Selected Scene Index: ${currentSceneIndex} (Scene Number: "${currentScene?.sceneNumber || '1'}")
-- Total Scenes: ${scenes.length}
-- Current View Settings: Font Size=${viewSettings.fontSize}pt, Zoom=${viewSettings.zoom}%, Spacing=${viewSettings.lineSpacing}, PageSize=${viewSettings.pageSize}, Margins=${viewSettings.margins}, ViewMode=${viewSettings.viewMode}
-- All Scenes Overview: ${JSON.stringify(sceneSummaries)}
-- Current Selected Scene Details: ${JSON.stringify(currentScene)}
+SCREENPLAY INTELLIGENCE DATA:
+- Total Scenes: ${intel.totalScenes} (Day: ${intel.dayScenes}, Night: ${intel.nightScenes}, INT: ${intel.intScenes}, EXT: ${intel.extScenes})
+- Total Characters Identified (${intel.totalCharacters}): ${JSON.stringify(intel.characters.slice(0, 25))}
+- Locations (${intel.locations.length}): ${JSON.stringify(intel.locations.slice(0, 15))}
+- Stunts: ${JSON.stringify(intel.stuntsList.slice(0, 10))}
+- Currently Selected Scene: Scene ${currentScene?.sceneNumber} (${currentScene?.rawHeading})
+- Scene Summaries: ${JSON.stringify(sceneSummaries)}
 
-AVAILABLE ACTION TYPES:
-1. "NAVIGATE_SCENE": Jump to a scene by sceneNumber or index.
-   Payload: { "targetSceneNumber": "2" }
-2. "NAVIGATE_PAGE": Jump to a specific page number.
-   Payload: { "targetPageNumber": 3 }
-3. "UPDATE_SCENE_METADATA": Modify scene location, intExt, timeOfDay, synopsis, or sceneNumber.
-   Payload: { "sceneNumber": "1", "location": "மதுரை மீனாட்சி அம்மன் கோவில்", "intExt": "வெளி", "timeOfDay": "இரவு", "synopsis": "..." }
-4. "EDIT_SCENE_ELEMENTS": Modify or append elements (dialogue, action, character) in a scene.
-   Payload: { "sceneNumber": "1", "mode": "APPEND" | "REPLACE", "elements": [ { "type": "CHARACTER", "text": "ரங்கா" }, { "type": "DIALOGUE", "text": "..." } ] }
-5. "INSERT_NEW_SCENE": Insert a brand new scene at a specific position.
-   Payload: { "insertAfterSceneNumber": "1", "newScene": { "sceneNumber": "2", "intExt": "உள்", "location": "காவல் நிலையம்", "timeOfDay": "பகல்", "synopsis": "...", "rawHeading": "காட்சி 2: உள். காவல் நிலையம் - பகல்", "elements": [...] } }
-6. "SPLIT_SCENE": Split a scene into two at a specified element index or paragraph keyword.
-   Payload: { "sceneNumber": "1", "splitAtElementIndex": 2 }
-7. "MERGE_SCENES": Merge two consecutive scenes together.
-   Payload: { "firstSceneNumber": "1", "secondSceneNumber": "2" }
-8. "DELETE_SCENE": Delete a specific scene.
-   Payload: { "sceneNumber": "3" }
-9. "RENUMBER_SCENES": Renumber all scenes sequentially (1, 2, 3...).
-   Payload: {}
-10. "ADD_BREAKDOWN_ITEM": Add one or more breakdown items (props, stunts, cast, vehicles, wardrobe, etc.) to a scene.
-    Payload: { "sceneNumber": "1", "items": [ { "category": "PROPS", "name": "Revolver", "nameTa": "துப்பாக்கி", "description": "Black police revolver", "count": 1 } ] }
-11. "REMOVE_BREAKDOWN_ITEM": Remove a breakdown item by name or id.
-    Payload: { "sceneNumber": "1", "itemName": "Revolver" }
-12. "SET_VIEW_SETTINGS": Adjust viewer preferences (fontSize, zoom, lineSpacing, pageSize, margins, viewMode).
-    Payload: { "fontSize": 16, "zoom": 120, "viewMode": "single", "margins": "STANDARD", "pageSize": "A4" }
-13. "POLISH_DIALOGUE": Rewrite or enhance dialogue for a scene or character.
-    Payload: { "sceneNumber": "1", "updatedScriptText": "..." }
-14. "TRANSLATE_SCENE": Translate scene elements/metadata to Tamil or English.
-    Payload: { "sceneNumber": "1", "targetLanguage": "ta" }
-15. "GENERAL_INSIGHT": General question answering, character analysis, stunt logistics, advice.
-    Payload: { "answer": "..." }
+AVAILABLE ACTION DIRECTIVES:
+1. "NAVIGATE_SCENE": Jump to a scene (payload: { "targetSceneNumber": "..." })
+2. "NAVIGATE_PAGE": Jump to a page (payload: { "targetPageNumber": ... })
+3. "UPDATE_SCENE_METADATA": Modify scene location, time, int/ext, or synopsis (payload: { "sceneNumber": "...", "location": "...", "timeOfDay": "...", "intExt": "..." })
+4. "EDIT_SCENE_ELEMENTS" / "POLISH_DIALOGUE": Modify/enhance scene text (payload: { "sceneNumber": "...", "updatedScriptText": "..." })
+5. "INSERT_NEW_SCENE": Add a new scene (payload: { "insertAfterSceneNumber": "...", "newScene": { ... } })
+6. "SPLIT_SCENE": Split a scene into two (payload: { "sceneNumber": "...", "splitAtElementIndex": ... })
+7. "MERGE_SCENES": Merge two scenes (payload: { "firstSceneNumber": "...", "secondSceneNumber": "..." })
+8. "DELETE_SCENE": Delete a scene (payload: { "sceneNumber": "..." })
+9. "RENUMBER_SCENES": Renumber all scenes sequentially (payload: {})
+10. "ADD_BREAKDOWN_ITEM": Add items to breakdown (payload: { "sceneNumber": "...", "items": [{ "category": "PROPS"|"STUNTS"|"CAST"|..., "name": "..." }] })
+11. "SET_VIEW_SETTINGS": Adjust zoom/font (payload: { "fontSize": ..., "zoom": ... })
+12. "GENERAL_INSIGHT": Answering questions, character counts, summaries, creative suggestions, screenplay analysis (payload: { "answer": "..." })
 
 USER REQUEST:
 "${userPrompt}"
 
-CRITICAL INSTRUCTIONS:
-- You must reply ONLY in valid JSON format matching this schema:
+RESPONSE INSTRUCTION:
+- If the user asks a question, set "actionType": "GENERAL_INSIGHT", "badgeTitle": "${isTamil ? 'திரைக்கதை விளக்கம்' : 'Script Insight'}", and provide a clear, comprehensive, nicely formatted answer in "summary" (and optional "explanation").
+- If the user commands an action to edit, navigate, or format, choose the appropriate actionType and fill the payload.
+- Respond in JSON format:
 {
-  "actionType": "NAVIGATE_SCENE" | "UPDATE_SCENE_METADATA" | "ADD_BREAKDOWN_ITEM" | ...,
-  "badgeTitle": "Short 2-4 word summary tag (e.g. 'Jumped to Sc. 3', 'Updated Metadata', 'Added 2 Props')",
-  "summary": "${isTamil ? 'செயல்படுத்திய விவரம் தமிழில்' : 'User-facing explanation of what you executed'}",
-  "explanation": "Optional detailed insight or script analysis",
+  "actionType": "GENERAL_INSIGHT" | "NAVIGATE_SCENE" | "UPDATE_SCENE_METADATA" | ...,
+  "badgeTitle": "...",
+  "summary": "${isTamil ? 'பதில் அல்லது செயல்படுத்திய விவரம் தமிழில்' : 'Direct, comprehensive response to user query or action description'}",
+  "explanation": "Optional bullet points or extra detail",
   "payload": { ... }
 }
 `;
@@ -184,8 +264,7 @@ CRITICAL INSTRUCTIONS:
       body: JSON.stringify({
         contents: [{ parts: [{ text: systemPrompt }] }],
         generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
+          temperature: 0.3,
         },
       }),
     });
@@ -196,13 +275,41 @@ CRITICAL INSTRUCTIONS:
 
     const data = await res.json();
     const parts = data.candidates?.[0]?.content?.parts || [];
-    const textPart = parts.find((p: any) => p.text)?.text || '{}';
-    const parsed = JSON.parse(textPart);
+    const candidateText = parts.find((p: any) => p.text)?.text || '';
 
-    return applyAgentPlan(parsed, currentSceneIndex, scenes, viewSettings, previousScenesSnapshot, language);
+    // Robust JSON extraction
+    let parsed: any = null;
+    const jsonBlockMatch = candidateText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    const rawJson = jsonBlockMatch ? jsonBlockMatch[1] : candidateText;
+    const objectMatch = rawJson.match(/\{[\s\S]*\}/);
+
+    if (objectMatch) {
+      try {
+        parsed = JSON.parse(objectMatch[0]);
+      } catch (e) {
+        parsed = null;
+      }
+    }
+
+    if (!parsed) {
+      // If candidateText was direct natural language answer
+      if (candidateText.trim().length > 0) {
+        parsed = {
+          actionType: 'GENERAL_INSIGHT',
+          badgeTitle: isTamil ? 'AI விளக்கம்' : 'AI Analysis',
+          summary: candidateText.trim(),
+        };
+      }
+    }
+
+    if (parsed) {
+      return applyAgentPlan(parsed, currentSceneIndex, scenes, viewSettings, previousScenesSnapshot, language);
+    }
+
+    throw new Error('Could not parse response.');
   } catch (err: any) {
-    console.warn('Gemini script agent API call failed, falling back to local heuristic execution engine:', err);
-    return applyLocalHeuristic(userPrompt, currentSceneIndex, scenes, viewSettings, previousScenesSnapshot, language);
+    console.warn('Gemini script agent fallback to local analytical engine:', err);
+    return applyLocalHeuristic(userPrompt, currentSceneIndex, scenes, viewSettings, previousScenesSnapshot, language, intel);
   }
 }
 
@@ -738,7 +845,7 @@ function applyAgentPlan(
 }
 
 /**
- * Fast client-side Heuristic Parser for instant offline command execution
+ * Fast client-side Heuristic & Analytical Engine for instant Q&A and offline execution
  */
 function applyLocalHeuristic(
   userPrompt: string,
@@ -746,15 +853,18 @@ function applyLocalHeuristic(
   scenes: Scene[],
   viewSettings: ViewSettings,
   previousScenesSnapshot: Scene[],
-  language: Language
+  language: Language,
+  intel?: ReturnType<typeof extractScreenplayIntelligence>
 ): AgentExecutionResult {
   const isTamil = language === 'ta';
   const text = userPrompt.toLowerCase().trim();
+  const screenIntel = intel || extractScreenplayIntelligence(scenes);
 
-  // 1. Navigation to scene (e.g. "go to scene 3", "jump to sc 2", "காட்சி 4")
-  const sceneNavMatch = text.match(/(?:go to|jump to|open|show|move to|காட்சி)\s*(?:scene|sc\.?|காட்சி)?\s*(\d+[a-z]?)/i) ||
-                        text.match(/(?:scene|காட்சி)\s*(\d+[a-z]?)/i);
-  if (sceneNavMatch) {
+  // 1. Navigation to scene
+  const sceneNavMatch =
+    text.match(/(?:go to|jump to|open|show|move to|காட்சி)\s*(?:scene|sc\.?|காட்சி)?\s*(\d+[a-z]?)/i) ||
+    text.match(/(?:scene|காட்சி)\s*(\d+[a-z]?)/i);
+  if (sceneNavMatch && !text.includes('about') && !text.includes('what') && !text.includes('who') && !text.includes('how')) {
     const scNum = sceneNavMatch[1];
     const targetIdx = findSceneIndex(scenes, scNum);
     if (targetIdx !== -1) {
@@ -770,9 +880,9 @@ function applyLocalHeuristic(
     }
   }
 
-  // 2. Navigation to page (e.g. "go to page 3", "jump to page 2", "பக்கம் 3")
+  // 2. Navigation to page
   const pageNavMatch = text.match(/(?:page|பக்கம்)\s*(\d+)/i);
-  if (pageNavMatch) {
+  if (pageNavMatch && !text.includes('how many') && !text.includes('count')) {
     const pgNum = parseInt(pageNavMatch[1], 10);
     const sceneOnPage = scenes.findIndex((s) => s.startPage === pgNum);
     return {
@@ -785,7 +895,129 @@ function applyLocalHeuristic(
     };
   }
 
-  // 3. Zoom / Font Size adjustments (e.g. "zoom 120", "font size 16", "increase font")
+  // 3. Questions about Characters / Cast (e.g. "how many characters", "who are the characters", "character list")
+  if (
+    text.includes('character') ||
+    text.includes('actor') ||
+    text.includes('cast') ||
+    text.includes('கதாபாத்திரம்') ||
+    text.includes('நடிகர்')
+  ) {
+    const topChars = screenIntel.characters.slice(0, 12);
+    const charListFormatted = topChars
+      .map((c, i) => `${i + 1}. **${c.name}** — in ${c.sceneCount} scene${c.sceneCount > 1 ? 's' : ''} (Sc. ${c.scenes.slice(0, 8).join(', ')}${c.scenes.length > 8 ? '...' : ''})`)
+      .join('\n');
+
+    const summary = isTamil
+      ? `இந்த திரைக்கதையில் மொத்தம் **${screenIntel.totalCharacters} கதாபாத்திரங்கள்** அடையாளம் காணப்பட்டுள்ளன:\n\n${charListFormatted}`
+      : `This screenplay has a total of **${screenIntel.totalCharacters} speaking characters** identified across ${scenes.length} scenes:\n\n${charListFormatted}`;
+
+    return {
+      actionType: 'GENERAL_INSIGHT',
+      status: 'INFO',
+      badgeTitle: isTamil ? `கதாபாத்திரங்கள் (${screenIntel.totalCharacters})` : `Characters (${screenIntel.totalCharacters})`,
+      summary,
+      explanation: isTamil
+        ? `குறிப்பு: மேலே உள்ள கதாபாத்திரங்கள் திரைக்கதையின் வசனங்கள் மற்றும் தயாரிப்பு குறிப்புகளிலிருந்து கணக்கிடப்பட்டுள்ளன.`
+        : `Note: Characters are extracted from scene dialogues and breakdown cast lists across all pages.`,
+    };
+  }
+
+  // 4. Questions about Locations (e.g. "locations", "how many locations", "where is it shot")
+  if (
+    text.includes('location') ||
+    text.includes('place') ||
+    text.includes('இடம்') ||
+    text.includes('இடங்கள்')
+  ) {
+    const locList = screenIntel.locations
+      .slice(0, 10)
+      .map((l, i) => `${i + 1}. **${l.location}** (${l.count} scene${l.count > 1 ? 's' : ''}: Sc. ${l.scenes.slice(0, 6).join(', ')})`)
+      .join('\n');
+
+    const summary = isTamil
+      ? `இந்த திரைக்கதையில் மொத்தம் **${screenIntel.locations.length} முக்கிய படப்பிடிப்பு இடங்கள்** உள்ளன:\n\n${locList}`
+      : `This screenplay spans across **${screenIntel.locations.length} distinct locations**:\n\n${locList}`;
+
+    return {
+      actionType: 'GENERAL_INSIGHT',
+      status: 'INFO',
+      badgeTitle: isTamil ? `படப்பிடிப்பு இடங்கள் (${screenIntel.locations.length})` : `Locations (${screenIntel.locations.length})`,
+      summary,
+    };
+  }
+
+  // 5. Questions about specific scene (e.g. "what is scene 3 about", "tell me about scene 1", "synopsis of scene 2")
+  const specificSceneQuery = text.match(/(?:scene|sc\.?|காட்சி)\s*(\d+[a-z]?)/i);
+  if (specificSceneQuery && (text.includes('about') || text.includes('what') || text.includes('tell') || text.includes('synopsis') || text.includes('விவரம்') || text.includes('சுருக்கம்'))) {
+    const targetIdx = findSceneIndex(scenes, specificSceneQuery[1]);
+    if (targetIdx !== -1) {
+      const sc = scenes[targetIdx];
+      const charsInSc = Array.from(new Set(
+        (sc.elements || []).filter((e) => e.type === 'CHARACTER').map((e) => e.text)
+      )).join(', ') || 'No speaking characters';
+
+      const summary = isTamil
+        ? `🎬 **காட்சி ${sc.sceneNumber}:** ${sc.rawHeading}\n\n• **இடம்:** ${sc.location}\n• **நேரம்:** ${sc.timeOfDay} (${sc.intExt})\n• **பக்க அளவு:** ${sc.formattedPages} பக்கங்கள்\n• **கதாபாத்திரங்கள்:** ${charsInSc}\n• **காட்சி சுருக்கம்:** ${sc.synopsis || 'சுருக்கம் இல்லை.'}`
+        : `🎬 **Scene ${sc.sceneNumber}:** ${sc.rawHeading}\n\n• **Location:** ${sc.location}\n• **Time:** ${sc.timeOfDay} (${sc.intExt})\n• **Length:** ${sc.formattedPages} pages (${sc.pagesEighths}/8)\n• **Characters:** ${charsInSc}\n• **Synopsis:** ${sc.synopsis || 'No synopsis available.'}`;
+
+      return {
+        actionType: 'GENERAL_INSIGHT',
+        status: 'INFO',
+        badgeTitle: isTamil ? `காட்சி ${sc.sceneNumber} விவரம்` : `Scene ${sc.sceneNumber} Info`,
+        summary,
+        targetSceneIndex: targetIdx,
+        targetPageIndex: sc.startPage ? sc.startPage - 1 : 0,
+      };
+    }
+  }
+
+  // 6. Questions about Stunts / Action
+  if (text.includes('stunt') || text.includes('fight') || text.includes('action') || text.includes('சண்டை')) {
+    const summary = isTamil
+      ? `இந்த திரைக்கதையில் உள்ள சண்டைக்காட்சிகள்:\n\n${
+          screenIntel.stuntsList.length > 0
+            ? screenIntel.stuntsList.map((st, i) => `${i + 1}. **காட்சி ${st.sceneNumber}:** ${st.description}`).join('\n')
+            : 'குறிப்பிட்ட சண்டைக்காட்சிகள் குறிக்கப்படவில்லை.'
+        }`
+      : `Stunt and action sequences identified in this script:\n\n${
+          screenIntel.stuntsList.length > 0
+            ? screenIntel.stuntsList.map((st, i) => `${i + 1}. **Scene ${st.sceneNumber}:** ${st.description}`).join('\n')
+            : 'No specific stunt breakdown items currently tagged. You can ask me to add stunt items to any scene!'
+        }`;
+
+    return {
+      actionType: 'GENERAL_INSIGHT',
+      status: 'INFO',
+      badgeTitle: isTamil ? `சண்டைக்காட்சிகள்` : `Stunt Breakdown`,
+      summary,
+    };
+  }
+
+  // 7. General Screenplay Overview / Summary / Stats
+  if (
+    text.includes('summary') ||
+    text.includes('overview') ||
+    text.includes('stats') ||
+    text.includes('how many scenes') ||
+    text.includes('day night') ||
+    text.includes('சுருக்கம்') ||
+    text.includes('எத்தனை காட்சி')
+  ) {
+    const totalEighths = scenes.reduce((acc, s) => acc + s.pagesEighths, 0);
+    const summary = isTamil
+      ? `📊 **திரைக்கதை தயாரிப்பு சுருக்கம்:**\n\n• **மொத்த காட்சிகள்:** ${scenes.length} காட்சிகள்\n• **பக்க அளவு:** ${formatEighths(totalEighths)} பக்கங்கள்\n• **பகல் / இரவு விகிதம்:** ${screenIntel.dayScenes} பகல் / ${screenIntel.nightScenes} இரவு\n• **உள் / வெளி விகிதம்:** ${screenIntel.intScenes} உள் / ${screenIntel.extScenes} வெளி\n• **கதாபாத்திரங்கள்:** ${screenIntel.totalCharacters} நடிகர்கள்\n• **இடங்கள்:** ${screenIntel.locations.length} இடங்கள்`
+      : `📊 **Screenplay Production Summary:**\n\n• **Total Scenes:** ${scenes.length} scenes\n• **Total Length:** ${formatEighths(totalEighths)} pages\n• **Day / Night Ratio:** ${screenIntel.dayScenes} Day / ${screenIntel.nightScenes} Night scenes\n• **Int / Ext Ratio:** ${screenIntel.intScenes} Interior / ${screenIntel.extScenes} Exterior scenes\n• **Speaking Characters:** ${screenIntel.totalCharacters} characters\n• **Unique Locations:** ${screenIntel.locations.length} locations`;
+
+    return {
+      actionType: 'GENERAL_INSIGHT',
+      status: 'INFO',
+      badgeTitle: isTamil ? `திரைக்கதை சுருக்கம்` : `Script Overview`,
+      summary,
+    };
+  }
+
+  // 8. Zoom / Font Size adjustments
   const zoomMatch = text.match(/zoom\s*(?:to\s*)?(\d+)/i);
   const fontMatch = text.match(/(?:font|size|text size)\s*(?:to\s*)?(\d+)/i);
   if (zoomMatch || fontMatch) {
@@ -800,7 +1032,7 @@ function applyLocalHeuristic(
     };
   }
 
-  // 4. Renumber scenes
+  // 9. Renumber scenes
   if (text.includes('renumber') || text.includes('வரிசைப்படுத்து') || text.includes('1..n')) {
     const renumbered = scenes.map((s, idx) => {
       const newNum = String(idx + 1);
@@ -847,7 +1079,7 @@ function applyLocalHeuristic(
     };
   }
 
-  // 5. Change Time of Day (e.g. "change time to night", "make scene 1 night", "இரவு காட்சியாக மாற்று")
+  // 10. Change Time of Day
   if (text.includes('night') || text.includes('இரவு') || text.includes('day') || text.includes('பகல்')) {
     const isNight = text.includes('night') || text.includes('இரவு');
     const scIdx = currentSceneIndex;
@@ -885,13 +1117,13 @@ function applyLocalHeuristic(
     }
   }
 
-  // 6. Generic answer
+  // Default helpful intelligence response
   return {
     actionType: 'GENERAL_INSIGHT',
     status: 'INFO',
-    badgeTitle: isTamil ? `திரைக்கதை தகவல்` : `Script Assistant`,
+    badgeTitle: isTamil ? `திரைக்கதை AI பதில்` : `Script Q&A`,
     summary: isTamil
-      ? `உங்கள் கட்டளை "${userPrompt}" பெறப்பட்டது. குறிப்பிட்ட காட்சி மாற்றம், தாவல் அல்லது தயாரிப்பு தேவைகளை எளிதாக நிறைவேற்றலாம்.`
-      : `Received your instruction "${userPrompt}". You can ask me to navigate, edit metadata, add breakdown items, split scenes, or adjust formatting directly.`,
+      ? `திரைக்கதை பற்றிய உங்கள் கேள்வி: "${userPrompt}".\n\nநீங்கள் கதாபாத்திரங்கள், சண்டைக்காட்சிகள், படப்பிடிப்பு இடங்கள், காட்சி சுருக்கம் அல்லது நேரலை மாற்றங்கள் (Scene edits, jumps, formatting) பற்றி எதை வேண்டுமானாலும் கேட்கலாம்.`
+      : `Here is the screenplay overview for your query: "${userPrompt}".\n\nYou can ask about character counts, plot points, stunt/prop breakdowns, scene summaries, or give direct editing directives.`,
   };
 }
