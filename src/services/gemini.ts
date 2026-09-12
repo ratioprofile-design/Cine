@@ -314,64 +314,137 @@ Be concise, practical, structured with bullet points, and directly actionable fo
  */
 function fallbackHeuristicBreakdown(scene: Scene, language: Language): BreakdownAIResponse {
   const items: BreakdownAIResponse['items'] = [];
-  const text = scene.rawScript || scene.rawHeading;
+  const text = `${scene.rawHeading} ${scene.rawScript || ''} ${scene.synopsis || ''}`;
+  const isTamil = language === 'ta';
 
-  // Extract characters from elements
-  const characters = scene.elements
+  // 1. CAST
+  const characters = (scene.elements || [])
     .filter((e) => e.type === 'CHARACTER')
     .map((e) => e.text.replace(/\(.*\)/, '').trim());
   const uniqueChars = Array.from(new Set(characters));
 
   uniqueChars.forEach((c) => {
-    items.push({
-      category: 'CAST',
-      name: c,
-      nameTa: c,
-      description: 'Speaking character in scene',
-      descriptionTa: 'காட்சியில் பேசும் கதாபாத்திரம்',
-      count: 1,
-    });
-  });
-
-  // Heuristic props
-  const propKeywords = ['gun', 'phone', 'knife', 'briefcase', 'laptop', 'bottle', 'key', 'file', 'bag', 'வாள்', 'துப்பாக்கி', 'போன்', 'பணம்', 'கத்தி'];
-  propKeywords.forEach((kw) => {
-    if (new RegExp(`\\b${kw}\\b`, 'i').test(text)) {
+    if (c && c.length >= 2) {
       items.push({
-        category: 'PROPS',
-        name: kw.toUpperCase(),
-        nameTa: kw,
-        description: 'Action prop identified in scene script',
+        category: 'CAST',
+        name: isTamil ? translateToTamil(c) : c,
+        nameTa: translateToTamil(c),
+        description: isTamil ? 'காட்சியில் பேசும் முதன்மை கதாபாத்திரம்' : 'Speaking character in scene',
+        descriptionTa: 'காட்சியில் பேசும் முதன்மை கதாபாத்திரம்',
         count: 1,
       });
     }
   });
 
-  // Heuristic stunts
-  if (/chase|fight|jump|explosion|punch|crash|சண்டை|பாய்ந்து|வெடி/i.test(text)) {
+  // 2. EXTRAS
+  if (/crowd|people|villagers|police squad|passersby|gang|கூட்டம்|மக்கள்|ஊர்மக்கள்|போலீசார்|பக்தர்கள்|ரவுடிகள்/i.test(text)) {
+    items.push({
+      category: 'EXTRAS',
+      name: isTamil ? 'துணை நடிகர்கள் & கூட்டம் (15-20 நபர்கள்)' : 'Background Crowd / Atmosphere (15-20 Extras)',
+      nameTa: 'துணை நடிகர்கள் & கூட்டம் (15-20 நபர்கள்)',
+      description: isTamil ? 'காட்சி சூழலுக்கான பின்னணி துணை நடிகர்கள்' : 'Atmosphere background performers for scene context',
+      count: 20,
+    });
+  }
+
+  // 3. STUNTS
+  if (/chase|fight|jump|explosion|punch|crash|gunfire|shoot|combat|fall|சண்டை|பாய்ந்து|வெடி|துரத்தல்|தாக்குதல்/i.test(text)) {
     items.push({
       category: 'STUNTS',
-      name: 'Action Choreography & Wire Work',
-      nameTa: 'சண்டைப் பயிற்சி & கயிறு வேலை',
-      description: 'Physical stunt or combat sequence requiring safety pads',
+      name: isTamil ? 'சண்டைப் பயிற்சி & ஆக்ஷன் பாதுகாப்பு' : 'Stunt Choreography & Action Safety Pads',
+      nameTa: 'சண்டைப் பயிற்சி & ஆக்ஷன் பாதுகாப்பு',
+      description: isTamil ? 'சண்டை மாஸ்டர் மேற்பார்வை மற்றும் கயிறு பாதுகாப்பு உபகரணங்கள்' : 'Fight coordinator supervision, wire work, and safety pads',
       count: 1,
     });
   }
 
-  // Camera rigs
+  // 4. VEHICLES
+  const vehicleMatches = text.match(/\b(car|bike|jeep|truck|van|auto|bolero|suv|கார்|பைக்|ஜீப்|லாரி|வேன்|ஆட்டோ|பொலிரோ)\b/gi);
+  if (vehicleMatches) {
+    const uniqueVehicles = Array.from(new Set(vehicleMatches.map((v) => v.toLowerCase())));
+    uniqueVehicles.forEach((v) => {
+      items.push({
+        category: 'VEHICLES',
+        name: isTamil ? translateToTamil(v) : `${v.toUpperCase()} (Picture Vehicle)`,
+        nameTa: translateToTamil(v),
+        description: isTamil ? 'படப்பிடிப்புக்கான முக்கிய வாகனம்' : 'Picture vehicle for scene shooting',
+        count: 1,
+      });
+    });
+  }
+
+  // 5. PROPS
+  const propKeywords = ['gun', 'phone', 'knife', 'briefcase', 'laptop', 'bottle', 'key', 'file', 'bag', 'sword', 'revolver', 'documents', 'money', 'வாள்', 'துப்பாக்கி', 'போன்', 'பணம்', 'கத்தி', 'பை', 'சாவி', 'கோப்பு', 'சூட்கேஸ்'];
+  propKeywords.forEach((kw) => {
+    if (new RegExp(`\\b${kw}\\b`, 'i').test(text)) {
+      items.push({
+        category: 'PROPS',
+        name: isTamil ? translateToTamil(kw) : kw.toUpperCase(),
+        nameTa: translateToTamil(kw),
+        description: isTamil ? 'காட்சியில் நடிகர்கள் பயன்படுத்தும் பொருள்' : 'Hand prop handled by actors',
+        count: 1,
+      });
+    }
+  });
+
+  // 6. SFX
+  if (/rain|smoke|fire|blast|explosion|sparks|மழை|புகை|தீ|நெருப்பு|வெடி/i.test(text)) {
+    items.push({
+      category: 'SFX',
+      name: isTamil ? 'சிறப்பு விளைவுகள் (மழை / புகை / தீப்பொறி)' : 'Practical Special Effects (Rain / Smoke / Fire)',
+      nameTa: 'சிறப்பு விளைவுகள் (மழை / புகை / தீப்பொறி)',
+      description: isTamil ? 'செயற்கை மழை / புகை இயந்திரம்' : 'Atmospheric smoke / rain rig setup',
+      count: 1,
+    });
+  }
+
+  // 7. WARDROBE
+  if (/police|uniform|saree|suit|costume|tactical|காக்கி|சீருடை|புடவை|வேஷ்டி|கோட்/i.test(text)) {
+    items.push({
+      category: 'WARDROBE',
+      name: isTamil ? 'காட்சிக்கான பிரத்யேக உடைகள்' : 'Character Specific Costumes',
+      nameTa: 'காட்சிக்கான பிரத்யேக உடைகள்',
+      description: isTamil ? 'கதாபாத்திரத்தின் பிரத்யேக உடை வடிவமைப்பு' : 'Specific wardrobe tailored for the scene sequence',
+      count: 1,
+    });
+  }
+
+  // 8. LIGHTING_GRIP
   if (scene.timeOfDay === 'NIGHT' || scene.timeOfDay === 'இரவு') {
     items.push({
       category: 'LIGHTING_GRIP',
-      name: 'Night Exterior HMI & Moonlight Rig',
-      nameTa: 'இரவு நேர விளக்கு அமைப்புகள்',
-      description: 'High output lighting for night ambience',
+      name: isTamil ? 'இரவு நேர விளக்கு அமைப்புகள் (HMI / Maxi Brute)' : 'Night Exterior HMI & Moonlight Ambient Rig',
+      nameTa: 'இரவு நேர விளக்கு அமைப்புகள் (HMI / Maxi Brute)',
+      description: isTamil ? 'இரவு நேர ஒளிப்பதிவிற்கான அதிதிறன் ஜெனரேட்டர் மற்றும் விளக்குகள்' : 'High output lighting & generator for night ambience',
+      count: 1,
+    });
+  }
+
+  // 9. SPECIAL_EQUIPMENT
+  if (/chase|fight|running|drone|crane|gimbal|steadicam|துரத்தல்|சண்டை|ட்ரோன்|கிரேன்/i.test(text)) {
+    items.push({
+      category: 'SPECIAL_EQUIPMENT',
+      name: isTamil ? 'ஸ்டெடிகேம் / கிம்பல் கேமரா அமைப்பு' : 'Steadicam / Gimbal Dynamic Camera Rig',
+      nameTa: 'ஸ்டெடிகேம் / கிம்பல் கேமரா அமைப்பு',
+      description: isTamil ? 'வேகமான இயக்க காட்சிகளை படம் பிடிக்க தேவையான கேமரா அமைப்பு' : 'Camera stabilization rig for tracking high speed motion',
+      count: 1,
+    });
+  }
+
+  // 10. SAFETY
+  if (/stunt|fire|night|forest|highway|சண்டை|தீ|இரவு|காடு|நெடுஞ்சாலை/i.test(text)) {
+    items.push({
+      category: 'SAFETY',
+      name: isTamil ? 'முதலுதவி மற்றும் களப்பாதுகாப்பு நெறிமுறைகள்' : 'First Aid Medic & On-Set Safety Protocol',
+      nameTa: 'முதலுதவி மற்றும் களப்பாதுகாப்பு நெறிமுறைகள்',
+      description: isTamil ? 'அவசர முதலுதவி பெட்டி மற்றும் களப்பாதுகாப்பு அதிகாரி' : 'On-site medical kit, fire extinguisher and safety coordinator',
       count: 1,
     });
   }
 
   return {
-    synopsis: scene.synopsis || scene.rawHeading,
-    synopsisTa: scene.synopsis || scene.rawHeading,
+    synopsis: isTamil && scene.synopsisTa ? scene.synopsisTa : scene.synopsis || scene.rawHeading,
+    synopsisTa: scene.synopsisTa || scene.synopsis || scene.rawHeading,
     items,
   };
 }

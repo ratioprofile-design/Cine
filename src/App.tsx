@@ -33,6 +33,8 @@ import { getProductionDocuments, saveProductionDocuments } from './services/docu
 import { breakdownSceneWithGemini } from './services/gemini';
 import { SAMPLE_SCRIPTS } from './services/sampleScripts';
 import { parseScreenplay, formatEighths } from './services/scriptParser';
+import { batchBreakdownManager, BatchProgressState } from './services/batchBreakdownService';
+import { Sparkles } from 'lucide-react';
 
 function MainApp() {
   const { language, effectiveBreakdownLang } = useLanguage();
@@ -42,6 +44,15 @@ function MainApp() {
   const [activeVerId, setActiveVerId] = useState<string>(() => getActiveVersionId());
   const [activeTab, setActiveTab] = useState<ActiveTab>('script');
   const [selectedSceneIndex, setSelectedSceneIndex] = useState(0);
+
+  // Background Batch Progress State
+  const [batchState, setBatchState] = useState<BatchProgressState>(() => batchBreakdownManager.getState());
+
+  useEffect(() => {
+    return batchBreakdownManager.subscribe((state) => {
+      setBatchState(state);
+    });
+  }, []);
 
   // Whiteboard, CallSheet & Production Documents State
   const [whiteboardCards, setWhiteboardCards] = useState<WhiteboardCard[]>(() => getWhiteboardCards());
@@ -150,6 +161,31 @@ function MainApp() {
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // Batch Breakdown across all or selected scenes
+  const handleRunBatchBreakdown = (targetScenes?: Scene[]) => {
+    const scenesToProcess = targetScenes || scenes;
+    if (scenesToProcess.length === 0) return;
+
+    showToast(
+      language === 'ta'
+        ? `🚀 ${scenesToProcess.length} காட்சிகளுக்கான AI மொத்த பகுப்பாய்வு பின்னணியில் தொடங்கப்பட்டது!`
+        : `🚀 Started AI batch breakdown for ${scenesToProcess.length} scenes in the background!`
+    );
+
+    batchBreakdownManager.startBatch(scenesToProcess, effectiveBreakdownLang, (updatedScene) => {
+      setVersions((prev) =>
+        prev.map((v) =>
+          v.id === activeVerId
+            ? {
+                ...v,
+                scenes: v.scenes.map((s) => (s.id === updatedScene.id ? updatedScene : s)),
+              }
+            : v
+        )
+      );
+    });
   };
 
   // Add Item to scene
@@ -332,6 +368,7 @@ function MainApp() {
             selectedSceneIndex={selectedSceneIndex}
             onSelectSceneIndex={setSelectedSceneIndex}
             onRunAiBreakdown={handleRunAiBreakdown}
+            onRunBatchBreakdown={handleRunBatchBreakdown}
             onAddItem={handleAddItem}
             onDeleteItem={handleDeleteItem}
             isAnalyzing={isAnalyzing}
@@ -413,6 +450,83 @@ function MainApp() {
         onClose={() => setIsCopilotOpen(false)}
         scenes={scenes}
       />
+
+      {/* Persistent Global Floating Batch Breakdown Progress Bar across all tabs */}
+      {batchState.isRunning && (
+        <div
+          className="no-print"
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#0f172a',
+            color: '#ffffff',
+            padding: '12px 20px',
+            borderRadius: '10px',
+            boxShadow: '0 20px 30px rgba(0,0,0,0.3)',
+            zIndex: 9990,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
+            border: '1.5px solid #38bdf8',
+            maxWidth: '90vw',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Sparkles size={16} color="#38bdf8" className="animate-spin" />
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 800 }}>
+                {language === 'ta'
+                  ? `AI மொத்த குறிப்பு பிரித்தெடுத்தல்: காட்சி ${batchState.completedCount} / ${batchState.totalScenes} (${batchState.percent}%)`
+                  : `AI Batch Breakdown in Progress: Scene ${batchState.completedCount} / ${batchState.totalScenes} (${batchState.percent}%)`}
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#94a3b8' }}>
+                Sc. {batchState.currentSceneNumber} ({batchState.currentSceneLocation})
+                {batchState.estimatedSecondsRemaining > 0 && ` • ~${batchState.estimatedSecondsRemaining}s left`}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ width: '120px', height: '6px', backgroundColor: '#334155', borderRadius: '999px', overflow: 'hidden' }}>
+            <div style={{ width: `${batchState.percent}%`, height: '100%', backgroundColor: '#38bdf8', transition: 'width 0.3s ease' }} />
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={() => setActiveTab('breakdown')}
+              style={{
+                backgroundColor: '#0284c7',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {language === 'ta' ? 'காண்' : 'View'}
+            </button>
+            <button
+              onClick={() => batchBreakdownManager.cancel()}
+              style={{
+                backgroundColor: '#ef4444',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+              title="Cancel Batch"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toastMessage && (
