@@ -31,6 +31,9 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
+import { ScriptAiAssistant } from './ScriptAiAssistant';
+import { ViewSettings } from '../services/scriptAgent';
+
 export type PageSize = 'A4' | 'LETTER' | 'LEGAL';
 export type PageMargins = 'STANDARD' | 'SCREENPLAY' | 'NARROW';
 export type LineSpacing = '1.0' | '1.15' | '1.5' | '2.0';
@@ -68,6 +71,7 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
   const [lineSpacing, setLineSpacing] = useState<LineSpacing>('1.15');
   const [zoom, setZoom] = useState<number>(100);
   const [showRuler, setShowRuler] = useState<boolean>(true);
+  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState<boolean>(false);
 
   // Manual Scene Division & Editor State
   const [hoveredElementId, setHoveredElementId] = useState<string | null>(null);
@@ -1047,6 +1051,29 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
           {/* Group 3: AI & Breakdown Actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button
+              onClick={() => setIsAiAssistantOpen(!isAiAssistantOpen)}
+              style={{
+                backgroundColor: isAiAssistantOpen ? '#0f172a' : '#f0f9ff',
+                color: isAiAssistantOpen ? '#ffffff' : '#0369a1',
+                border: isAiAssistantOpen ? '1px solid #0f172a' : '1.5px solid #0284c7',
+                borderRadius: '4px',
+                padding: '5px 12px',
+                fontSize: '11.5px',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                boxShadow: isAiAssistantOpen ? '0 2px 4px rgba(0,0,0,0.1)' : '0 1px 3px rgba(2, 132, 199, 0.15)',
+                transition: 'all 0.15s ease',
+              }}
+              title="Autonomous AI Script Assistant (English & Tamil)"
+            >
+              <Sparkles size={13} color={isAiAssistantOpen ? '#38bdf8' : '#0284c7'} />
+              <span>{isAiAssistantOpen ? (fontFamily?.includes('tamil') ? 'AI உதவியாளர் (Active)' : 'AI Assistant (Active)') : (fontFamily?.includes('tamil') ? '✨ AI உதவியாளர்' : '✨ AI Assistant')}</span>
+            </button>
+
+            <button
               onClick={handleAutoSectionScreenplay}
               disabled={isAutoFormatting}
               style={{
@@ -1556,6 +1583,72 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* AUTONOMOUS AI SCRIPT ASSISTANT (COLLAPSIBLE DRAWER)      */}
+      {/* ======================================================== */}
+      <ScriptAiAssistant
+        isOpen={isAiAssistantOpen}
+        onClose={() => setIsAiAssistantOpen(false)}
+        scenes={scenes}
+        selectedSceneIndex={selectedSceneIndex}
+        onSelectSceneIndex={handleSelectScene}
+        onNavigateToPage={(pIdx) => {
+          setActivePageIndex(pIdx);
+          if (viewMode === 'continuous') {
+            const pageEl = document.getElementById(`script-page-${pIdx + 1}`);
+            if (pageEl) pageEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }}
+        onUpdateScenes={onUpdateScenes || (() => {})}
+        viewSettings={{
+          fontSize,
+          lineSpacing,
+          zoom,
+          pageSize,
+          margins,
+          viewMode,
+        }}
+        onUpdateViewSettings={(newSettings) => {
+          if (newSettings.fontSize !== undefined) setFontSize(newSettings.fontSize);
+          if (newSettings.zoom !== undefined) setZoom(newSettings.zoom);
+          if (newSettings.lineSpacing) setLineSpacing(newSettings.lineSpacing);
+          if (newSettings.pageSize) setPageSize(newSettings.pageSize);
+          if (newSettings.margins) setMargins(newSettings.margins);
+          if (newSettings.viewMode) setViewMode(newSettings.viewMode);
+        }}
+      />
+
+      {/* Floating Quick Trigger Button when Assistant is closed */}
+      {!isAiAssistantOpen && (
+        <button
+          onClick={() => setIsAiAssistantOpen(true)}
+          className="no-print"
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            backgroundColor: '#0f172a',
+            color: '#ffffff',
+            border: '1.5px solid #38bdf8',
+            borderRadius: '999px',
+            padding: '10px 18px',
+            fontSize: '13px',
+            fontWeight: 800,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
+            zIndex: 400,
+            transition: 'all 0.15s ease',
+          }}
+          title="Open AI Script Assistant"
+        >
+          <Sparkles size={16} color="#38bdf8" />
+          <span>{fontFamily?.includes('tamil') ? '✨ AI உதவியாளர்' : '✨ AI Assistant'}</span>
+        </button>
       )}
     </div>
   );
