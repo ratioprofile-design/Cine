@@ -262,16 +262,44 @@ function applyAgentPlan(
       const targetScene = scenes[validIdx];
       if (!targetScene) break;
 
+      const newSceneNum = payload.sceneNumber || targetScene.sceneNumber;
+      const newIntExt = payload.intExt || targetScene.intExt;
+      const newLoc = payload.location || targetScene.location;
+      const newLocTa = payload.locationTa || (payload.location ? translateToTamil(payload.location) : targetScene.locationTa);
+      const newTime = payload.timeOfDay || targetScene.timeOfDay;
+      const newSyn = payload.synopsis || targetScene.synopsis;
+      const newSynTa = payload.synopsisTa || (payload.synopsis ? translateToTamil(payload.synopsis) : targetScene.synopsisTa);
+      const newHeading = `காட்சி ${newSceneNum}: ${newIntExt} ${newLoc} - ${newTime}`;
+
+      let hasSlugline = false;
+      const updatedElements = targetScene.elements.map((el) => {
+        if (el.type === 'SLUGLINE') {
+          hasSlugline = true;
+          return { ...el, text: newHeading };
+        }
+        return el;
+      });
+
+      if (!hasSlugline) {
+        updatedElements.unshift({
+          id: `el-${Date.now()}-slug`,
+          type: 'SLUGLINE',
+          text: newHeading,
+        });
+      }
+
       const updatedScene: Scene = {
         ...targetScene,
-        sceneNumber: payload.sceneNumber || targetScene.sceneNumber,
-        intExt: payload.intExt || targetScene.intExt,
-        location: payload.location || targetScene.location,
-        locationTa: payload.locationTa || (payload.location ? translateToTamil(payload.location) : targetScene.locationTa),
-        timeOfDay: payload.timeOfDay || targetScene.timeOfDay,
-        synopsis: payload.synopsis || targetScene.synopsis,
-        synopsisTa: payload.synopsisTa || (payload.synopsis ? translateToTamil(payload.synopsis) : targetScene.synopsisTa),
-        rawHeading: `காட்சி ${payload.sceneNumber || targetScene.sceneNumber}: ${payload.intExt || targetScene.intExt} ${payload.location || targetScene.location} - ${payload.timeOfDay || targetScene.timeOfDay}`,
+        sceneNumber: newSceneNum,
+        intExt: newIntExt,
+        location: newLoc,
+        locationTa: newLocTa,
+        timeOfDay: newTime,
+        synopsis: newSyn,
+        synopsisTa: newSynTa,
+        rawHeading: newHeading,
+        elements: updatedElements,
+        rawScript: updatedElements.map((e) => e.text).join('\n'),
       };
 
       const newScenes = [...scenes];
@@ -588,11 +616,39 @@ function applyAgentPlan(
     }
 
     case 'RENUMBER_SCENES': {
-      const renumbered = scenes.map((s, idx) => ({
-        ...s,
-        sceneNumber: String(idx + 1),
-        rawHeading: s.rawHeading.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${idx + 1}`),
-      }));
+      const renumbered = scenes.map((s, idx) => {
+        const newNum = String(idx + 1);
+        let newHeading = s.rawHeading;
+        if (/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i.test(newHeading)) {
+          newHeading = newHeading.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${newNum}`);
+        } else {
+          newHeading = `காட்சி: ${newNum} ${s.intExt} ${s.location} - ${s.timeOfDay}`;
+        }
+
+        let hasSlugline = false;
+        const updatedElements = s.elements.map((el) => {
+          if (el.type === 'SLUGLINE') {
+            hasSlugline = true;
+            if (/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i.test(el.text)) {
+              return { ...el, text: el.text.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${newNum}`) };
+            }
+            return { ...el, text: newHeading };
+          }
+          return el;
+        });
+
+        if (!hasSlugline) {
+          updatedElements.unshift({ id: `el-${Date.now()}-${idx}-slug`, type: 'SLUGLINE', text: newHeading });
+        }
+
+        return {
+          ...s,
+          sceneNumber: newNum,
+          rawHeading: newHeading,
+          elements: updatedElements,
+          rawScript: updatedElements.map((e) => e.text).join('\n'),
+        };
+      });
 
       return {
         actionType,
@@ -746,11 +802,40 @@ function applyLocalHeuristic(
 
   // 4. Renumber scenes
   if (text.includes('renumber') || text.includes('வரிசைப்படுத்து') || text.includes('1..n')) {
-    const renumbered = scenes.map((s, idx) => ({
-      ...s,
-      sceneNumber: String(idx + 1),
-      rawHeading: s.rawHeading.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${idx + 1}`),
-    }));
+    const renumbered = scenes.map((s, idx) => {
+      const newNum = String(idx + 1);
+      let newHeading = s.rawHeading;
+      if (/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i.test(newHeading)) {
+        newHeading = newHeading.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${newNum}`);
+      } else {
+        newHeading = `காட்சி: ${newNum} ${s.intExt} ${s.location} - ${s.timeOfDay}`;
+      }
+
+      let hasSlugline = false;
+      const updatedElements = s.elements.map((el) => {
+        if (el.type === 'SLUGLINE') {
+          hasSlugline = true;
+          if (/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i.test(el.text)) {
+            return { ...el, text: el.text.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${newNum}`) };
+          }
+          return { ...el, text: newHeading };
+        }
+        return el;
+      });
+
+      if (!hasSlugline) {
+        updatedElements.unshift({ id: `el-${Date.now()}-${idx}-slug`, type: 'SLUGLINE', text: newHeading });
+      }
+
+      return {
+        ...s,
+        sceneNumber: newNum,
+        rawHeading: newHeading,
+        elements: updatedElements,
+        rawScript: updatedElements.map((e) => e.text).join('\n'),
+      };
+    });
+
     return {
       actionType: 'RENUMBER_SCENES',
       status: 'SUCCESS',
@@ -769,10 +854,20 @@ function applyLocalHeuristic(
     const target = scenes[scIdx];
     if (target) {
       const newTime = isNight ? 'இரவு' : 'பகல்';
+      const newHeading = `காட்சி ${target.sceneNumber}: ${target.intExt} ${target.location} - ${newTime}`;
+      const updatedElements = target.elements.map((el) => {
+        if (el.type === 'SLUGLINE') {
+          return { ...el, text: newHeading };
+        }
+        return el;
+      });
+
       const updated: Scene = {
         ...target,
         timeOfDay: newTime,
-        rawHeading: `காட்சி ${target.sceneNumber}: ${target.intExt} ${target.location} - ${newTime}`,
+        rawHeading: newHeading,
+        elements: updatedElements,
+        rawScript: updatedElements.map((e) => e.text).join('\n'),
       };
       const newScenes = [...scenes];
       newScenes[scIdx] = updated;

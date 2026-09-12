@@ -257,11 +257,39 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
   const handleRenumberAllScenes = () => {
     if (!onUpdateScenes) return;
 
-    const renumbered = scenes.map((s, idx) => ({
-      ...s,
-      sceneNumber: String(idx + 1),
-      rawHeading: s.rawHeading.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${idx + 1}`),
-    }));
+    const renumbered = scenes.map((s, idx) => {
+      const newNum = String(idx + 1);
+      let newHeading = s.rawHeading;
+      if (/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i.test(newHeading)) {
+        newHeading = newHeading.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${newNum}`);
+      } else {
+        newHeading = `காட்சி: ${newNum} ${s.intExt} ${s.location} - ${s.timeOfDay}`;
+      }
+
+      let hasSlugline = false;
+      const updatedElements = s.elements.map((el) => {
+        if (el.type === 'SLUGLINE') {
+          hasSlugline = true;
+          if (/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i.test(el.text)) {
+            return { ...el, text: el.text.replace(/^(?:காட்சி|SCENE)\s*[:\.]?\s*\w+/i, `காட்சி: ${newNum}`) };
+          }
+          return { ...el, text: newHeading };
+        }
+        return el;
+      });
+
+      if (!hasSlugline) {
+        updatedElements.unshift({ id: `el-${Date.now()}-${idx}-slug`, type: 'SLUGLINE', text: newHeading });
+      }
+
+      return {
+        ...s,
+        sceneNumber: newNum,
+        rawHeading: newHeading,
+        elements: updatedElements,
+        rawScript: updatedElements.map((e) => e.text).join('\n'),
+      };
+    });
 
     onUpdateScenes(renumbered);
   };
@@ -270,7 +298,28 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
   const handleSaveSceneMetadata = () => {
     if (!editingScene || !onUpdateScenes) return;
 
-    const updated = scenes.map((s) => (s.id === editingScene.id ? editingScene : s));
+    const newHeading = `காட்சி ${editingScene.sceneNumber}: ${editingScene.intExt} ${editingScene.location} - ${editingScene.timeOfDay}`;
+    let hasSlugline = false;
+    const updatedElements = editingScene.elements.map((el) => {
+      if (el.type === 'SLUGLINE') {
+        hasSlugline = true;
+        return { ...el, text: newHeading };
+      }
+      return el;
+    });
+
+    if (!hasSlugline) {
+      updatedElements.unshift({ id: `el-${Date.now()}-slug`, type: 'SLUGLINE', text: newHeading });
+    }
+
+    const finalScene: Scene = {
+      ...editingScene,
+      rawHeading: newHeading,
+      elements: updatedElements,
+      rawScript: updatedElements.map((e) => e.text).join('\n'),
+    };
+
+    const updated = scenes.map((s) => (s.id === editingScene.id ? finalScene : s));
     onUpdateScenes(updated);
     setEditingScene(null);
   };
@@ -328,7 +377,8 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
     const targetScene = scenes.find((s) => s.id === sceneId);
 
     switch (el.type) {
-      case 'SLUGLINE':
+      case 'SLUGLINE': {
+        const displayText = targetScene?.rawHeading || el.text;
         return (
           <div
             key={key}
@@ -349,7 +399,7 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
               justifyContent: 'space-between',
             }}
           >
-            <span>{el.text}</span>
+            <span>{displayText}</span>
             {isHovered && (
               <button
                 onClick={() => {
@@ -377,6 +427,7 @@ export const ScriptViewer: React.FC<ScriptViewerProps> = ({
             )}
           </div>
         );
+      }
 
       case 'CHARACTER':
         return (
